@@ -50,6 +50,11 @@ std::vector<float> eig2stdvec( MatrixXd _eigmat )
     return vec;
 } // eig2stdvec
 
+// SCManager::SCManager(const Params& params)
+// : params_(params)
+// {
+//     PC_UNIT_SECTORANGLE = 360. / params_.Ns;
+// }
 
 double SCManager::distDirectSC ( MatrixXd &_sc1, MatrixXd &_sc2 )
 {
@@ -105,7 +110,7 @@ std::pair<double, int> SCManager::distanceBtnScanContext( MatrixXd &_sc1, Matrix
     MatrixXd vkey_sc2 = makeSectorkeyFromScancontext( _sc2 );
     int argmin_vkey_shift = fastAlignUsingVkey( vkey_sc1, vkey_sc2 );
 
-    const int SEARCH_RADIUS = round( 0.5 * SEARCH_RATIO * _sc1.cols() ); // a half of search range 
+    const int SEARCH_RADIUS = round( 0.5 * params_.search_ratio * _sc1.cols() ); // a half of search range 
     std::vector<int> shift_idx_search_space { argmin_vkey_shift };
     for ( int ii = 1; ii < SEARCH_RADIUS + 1; ii++ )
     {
@@ -137,7 +142,7 @@ std::pair<double, int> SCManager::distanceBtnScanContext( MatrixXd &_sc1, Matrix
 MatrixXd SCManager::makeScancontext( Eigen::MatrixX3d & _scan_down )
 {
     const int NO_POINT = -1000;
-    MatrixXd desc = NO_POINT * MatrixXd::Ones(PC_NUM_RING, PC_NUM_SECTOR);
+    MatrixXd desc = NO_POINT * MatrixXd::Ones(params_.Nr, params_.Ns);
 
     double azim_angle, azim_range; // wihtin 2d plane
     int ring_idx, sctor_idx;
@@ -153,11 +158,11 @@ MatrixXd SCManager::makeScancontext( Eigen::MatrixX3d & _scan_down )
         azim_angle = xy2theta(ptx, pty);
 
         // if range is out of roi, pass
-        if( azim_range > PC_MAX_RADIUS )
+        if( azim_range > params_.max_radius )
             continue;
 
-        ring_idx = std::max( std::min( PC_NUM_RING, int(ceil( (azim_range / PC_MAX_RADIUS) * PC_NUM_RING )) ), 1 );
-        sctor_idx = std::max( std::min( PC_NUM_SECTOR, int(ceil( (azim_angle / 360.0) * PC_NUM_SECTOR )) ), 1 );
+        ring_idx = std::max( std::min( params_.Nr, int(ceil( (azim_range / params_.max_radius) * params_.Nr )) ), 1 );
+        sctor_idx = std::max( std::min( params_.Ns, int(ceil( (azim_angle / 360.0) * params_.Ns )) ), 1 );
 
         // taking maximum z 
         if ( desc(ring_idx-1, sctor_idx-1) < ptz ) // -1 means cpp starts from 0
@@ -227,10 +232,10 @@ void SCManager::makeAndSaveScancontextAndKeys(Eigen::MatrixX3d& _scan_down)
 void SCManager::constructTree(void) 
 {
     polarcontext_invkeys_to_search_.clear();
-    polarcontext_invkeys_to_search_.assign( polarcontext_invkeys_mat_.begin(), polarcontext_invkeys_mat_.end() - NUM_EXCLUDE_RECENT ) ;
+    polarcontext_invkeys_to_search_.assign( polarcontext_invkeys_mat_.begin(), polarcontext_invkeys_mat_.end() - params_.num_exclude_recent ) ;
 
     polarcontext_tree_.reset(); 
-    polarcontext_tree_ = std::make_unique<InvKeyTree>(PC_NUM_RING /* dim */, polarcontext_invkeys_to_search_, 10 /* max leaf */ );
+    polarcontext_tree_ = std::make_unique<InvKeyTree>(params_.Nr /* dim */, polarcontext_invkeys_to_search_, 10 /* max leaf */ );
 }
 
 std::tuple<int, double, double> SCManager::detectLoopClosureID ( void )
@@ -241,14 +246,14 @@ std::tuple<int, double, double> SCManager::detectLoopClosureID ( void )
     auto curr_desc = polarcontexts_.back(); // current observation (query)
 
     // step 1: candidates from ringkey tree_
-    if( polarcontext_invkeys_mat_.size() < NUM_EXCLUDE_RECENT + 1)
+    if( polarcontext_invkeys_mat_.size() < params_.num_exclude_recent + 1)
     {
         std::tuple<int, double, double> result {loop_id, 0.0, 0.0};
         return result; // Early return 
     }
 
     // tree_ reconstruction (not mandatory to make everytime)
-    if( tree_making_period_conter % TREE_MAKING_PERIOD_ == 0) // to save computation cost
+    if( tree_making_period_conter % params_.tree_making_period == 0) // to save computation cost
     {
         constructTree();
     }
@@ -259,15 +264,15 @@ std::tuple<int, double, double> SCManager::detectLoopClosureID ( void )
     int nn_idx = 0;
 
     // knn search
-    std::vector<size_t> candidate_indexes( NUM_CANDIDATES_FROM_TREE ); 
-    std::vector<float> out_dists_sqr( NUM_CANDIDATES_FROM_TREE );
+    std::vector<size_t> candidate_indexes( params_.num_candidates_from_tree ); 
+    std::vector<float> out_dists_sqr( params_.num_candidates_from_tree );
 
-    nanoflann::KNNResultSet<float> knnsearch_result( NUM_CANDIDATES_FROM_TREE );
+    nanoflann::KNNResultSet<float> knnsearch_result( params_.num_candidates_from_tree );
     knnsearch_result.init( &candidate_indexes[0], &out_dists_sqr[0] );
     polarcontext_tree_->index->findNeighbors( knnsearch_result, &curr_key[0] /* query */, nanoflann::SearchParams(10) ); 
 
     // step 2: pairwise distance (find optimal columnwise best-fit using cosine distance)
-    for ( int candidate_iter_idx = 0; candidate_iter_idx < NUM_CANDIDATES_FROM_TREE; candidate_iter_idx++ )
+    for ( int candidate_iter_idx = 0; candidate_iter_idx < params_.num_candidates_from_tree; candidate_iter_idx++ )
     {
         MatrixXd polarcontext_candidate = polarcontexts_[ candidate_indexes[candidate_iter_idx] ];
         std::pair<double, int> sc_dist_result = distanceBtnScanContext( curr_desc, polarcontext_candidate ); 
